@@ -24,9 +24,6 @@
   import {
     getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, getDoc, getDocs, setDoc, onSnapshot
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import {
-    getStorage, ref as storageRef, uploadString, getDownloadURL
-  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyD3BGGIX2B104SdhML7eoxcvl3CjKGfXw4",
@@ -37,13 +34,12 @@
     appId: "1:790326632020:web:91cb2da018fc5e061717c1"
   };
   const PREFIX = 'cmm_';
-  let db = null, storage = null, ready = false;
+  let db = null, ready = false;
 
   (async function initFb() {
     try {
       const app = initializeApp(firebaseConfig);
       db = getFirestore(app);
-      storage = getStorage(app);
       try {
         const auth = getAuth(app);
         await signInAnonymously(auth);
@@ -100,21 +96,9 @@
       const arr = [];
       snap.forEach(d => arr.push(Object.assign({ id: d.id }, d.data())));
       return arr;
-    },
-    async uploadPhoto(dataUrl, pathHint) {
-      const path = 'cmm_photos/' + (pathHint || 'photo') + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7) + '.jpg';
-      const r = storageRef(storage, path);
-      await uploadString(r, dataUrl, 'data_url');
-      return await getDownloadURL(r);
     }
   };
 </script>
-<!-- Firebase (اختیاری): برای فعال‌سازی حافظه آنلاین مشترک واقعی بین چند کاربر،
-     یک پروژه رایگان در https://console.firebase.google.com بسازید و مقادیر
-     FIREBASE_CONFIG را در ابتدای app.js با کلیدهای پروژه خودتان جایگزین کنید.
-     تا زمانی که این مقادیر خالی باشند، برنامه به‌صورت خودکار از حافظه محلی مرورگر استفاده می‌کند. -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
 :root{
   --bg:#0a0f1c;
@@ -1221,9 +1205,6 @@ async function fbDelete(prop, id) {
   try { await window.CMMFirebase.deleteDoc(name, id); }
   catch (e) { showToast('خطا در حذف؛ اتصال اینترنت را بررسی کنید'); throw e; }
 }
-async function fbUploadPhoto(dataUrl, hint) {
-  return await window.CMMFirebase.uploadPhoto(dataUrl, hint);
-}
 
 /* one-time seed check per collection (only runs if the collection is truly empty
    the very first time the app connects - never re-seeds after that, even if a
@@ -1984,49 +1965,44 @@ function cmForm(existing) {
     });
   }
 
-  let uploadingCount = 0;
   function renderPhotoPreview() {
     const wrap = document.getElementById('cmf_photoPreview');
-    let html = photos.map((p, i) => `
+    if (!photos.length) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = photos.map((p, i) => `
       <div style="position:relative; width:64px; height:64px;">
         <img src="${p}" style="width:100%; height:100%; object-fit:cover; border-radius:8px; border:1px solid var(--border);">
         <div data-removephoto="${i}" style="position:absolute; top:-6px; left:-6px; width:20px; height:20px; background:var(--red); border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; color:#fff; line-height:1;">×</div>
       </div>`).join('');
-    for (let i = 0; i < uploadingCount; i++) {
-      html += `<div style="width:64px; height:64px; border-radius:8px; border:1px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:9px; color:var(--text-dim); text-align:center;">در حال<br>آپلود...</div>`;
-    }
-    wrap.innerHTML = html;
     wrap.querySelectorAll('[data-removephoto]').forEach(el => {
       el.addEventListener('click', () => { photos.splice(+el.dataset.removephoto, 1); renderPhotoPreview(); });
     });
   }
 
+  function totalPhotosBytes() {
+    return photos.reduce((s, p) => s + p.length, 0);
+  }
+
   function handlePhotoUpload(e) {
     const files = Array.from(e.target.files || []);
     files.forEach(file => {
-      uploadingCount++;
-      renderPhotoPreview();
       const reader = new FileReader();
       reader.onload = ev => {
         const img = new Image();
-        img.onload = async () => {
-          const maxW = 1280;
+        img.onload = () => {
+          const maxW = 700;
           const scale = Math.min(1, maxW / img.width);
           const canvas = document.createElement('canvas');
           canvas.width = Math.round(img.width * scale);
           canvas.height = Math.round(img.height * scale);
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-          try {
-            const url = await fbUploadPhoto(dataUrl, (existing ? existing.id : 'new') + '-' + Date.now());
-            photos.push(url);
-          } catch (err) {
-            showToast('خطا در آپلود عکس؛ اتصال اینترنت را بررسی کنید');
-          } finally {
-            uploadingCount--;
-            renderPhotoPreview();
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
+          if (totalPhotosBytes() + dataUrl.length > 700000) {
+            showToast('حجم پیوست‌های این تعمیر پر شده (محدودیت هر رکورد در Firestore)؛ لطفاً یک عکس را حذف کنید یا در رکورد جدید ثبت کنید');
+            return;
           }
+          photos.push(dataUrl);
+          renderPhotoPreview();
         };
         img.src = ev.target.result;
       };
@@ -2046,7 +2022,6 @@ function cmForm(existing) {
   saveBtn.classList.add('btn-primary');
 
   modalOnSave = async () => {
-    if (uploadingCount > 0) { showToast('لطفاً تا پایان آپلود عکس‌ها صبر کنید'); return; }
     const equipmentId = document.getElementById('cmf_equipment').value;
     const dateVal = document.getElementById('cmf_date').value.trim();
     const issue = document.getElementById('cmf_issue').value.trim();
